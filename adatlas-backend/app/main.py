@@ -12,6 +12,7 @@ from app.models.schemas import AnalyzeResult, UploadResponse, BatchAnalyzeReques
 from app.services.storage import Storage
 from app.services.groq_helper import GroqHelper
 from app.services.openai_helper import OpenAIHelper
+from app.services.reka_helper import RekaHelper
 from app.utils.timing import stopwatch
 
 app = FastAPI(title=settings.APP_NAME, version=settings.APP_VERSION)
@@ -26,6 +27,7 @@ app.add_middleware(
 storage = Storage()
 groq_helper = GroqHelper()
 openai_helper = OpenAIHelper()
+reka_helper = RekaHelper()
 
 # File extensions
 VIDEO_EXT = {".mp4", ".mov", ".mkv", ".avi", ".m4v"}
@@ -58,7 +60,7 @@ async def upload(file: UploadFile = File(...)):
     fid, path = storage.save_upload(file.file, file.filename)
     return UploadResponse(id=fid, file_name=Path(path).name, saved_path=str(path))
 
-@app.post("/analyze", response_model=AnalyzeResult)
+@app.post("/analyze")
 async def analyze(file_id: Optional[str] = None, file_path: Optional[str] = None):
     """
     Analyze a video or image file using Groq + ffmpeg.
@@ -115,15 +117,25 @@ async def analyze(file_id: Optional[str] = None, file_path: Optional[str] = None
                         activity = features.get("activity", "unknown")
                         video_summary = f"A {mood} video showing {activity}."
                 
-                return AnalyzeResult(
-                    file_name=Path(path).name,
-                    duration=frame_data["duration"],
-                    scene_count=scene_count,
-                    color_tone=color_tone,
-                    vision_features=vision_result.get("vision_features"),
-                    video_summary=video_summary,
-                    error=vision_result.get("error")
-                )
+                # Get Reka features
+                reka_features = await reka_helper.get_reka_features(str(path))
+                
+                # Combine OpenAI and Reka features
+                openai_features = {
+                    "file_name": Path(path).name,
+                    "duration": frame_data["duration"],
+                    "scene_count": scene_count,
+                    "color_tone": color_tone,
+                    "vision_features": vision_result.get("vision_features"),
+                    "video_summary": video_summary,
+                    "error": vision_result.get("error")
+                }
+                
+                return {
+                    "openai": openai_features,
+                    "reka_features": reka_features,
+                    "unified": {**openai_features, **{"reka": reka_features}}
+                }
                 
             except Exception as e:
                 return AnalyzeResult(
@@ -148,15 +160,25 @@ async def analyze(file_id: Optional[str] = None, file_path: Optional[str] = None
                     use_reka=False  # Images don't need Reka
                 )
                 
-                return AnalyzeResult(
-                    file_name=Path(path).name,
-                    duration=0.0,  # Images have no duration
-                    scene_count=1,
-                    color_tone=None,
-                    vision_features=vision_result.get("vision_features"),
-                    video_summary=None,
-                    error=vision_result.get("error")
-                )
+                # Get Reka features for images too
+                reka_features = await reka_helper.get_reka_features(str(path))
+                
+                # Combine OpenAI and Reka features
+                openai_features = {
+                    "file_name": Path(path).name,
+                    "duration": 0.0,  # Images have no duration
+                    "scene_count": 1,
+                    "color_tone": None,
+                    "vision_features": vision_result.get("vision_features"),
+                    "video_summary": None,
+                    "error": vision_result.get("error")
+                }
+                
+                return {
+                    "openai": openai_features,
+                    "reka_features": reka_features,
+                    "unified": {**openai_features, **{"reka": reka_features}}
+                }
                 
             except Exception as e:
                 return AnalyzeResult(
@@ -178,7 +200,7 @@ async def batch_analyze(req: BatchAnalyzeRequest):
     for fid in req.file_ids:
         try:
             result = await analyze(file_id=fid)
-            results.append(result.model_dump())
+            results.append(result)
         except Exception as e:
             results.append({
                 "file_id": fid,
@@ -207,7 +229,7 @@ async def debug_analyze_demo():
         return {
             "debug": True,
             "demo_file": str(demo_video),
-            "analysis_result": result.model_dump()
+            "analysis_result": result
         }
         
     except Exception as e:

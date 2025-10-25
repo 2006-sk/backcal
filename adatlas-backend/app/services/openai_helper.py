@@ -3,6 +3,7 @@ import io
 import json
 import re
 import os
+import ssl
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 import ffmpeg
@@ -10,6 +11,8 @@ from PIL import Image
 import cv2
 import numpy as np
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 from app.core.config import settings
 
@@ -22,6 +25,31 @@ class OpenAIHelper:
 
     def enabled(self) -> bool:
         return bool(self.openai_api_key)
+    
+    def _create_session(self):
+        """Create a robust requests session with SSL handling."""
+        session = requests.Session()
+        
+        # Configure retry strategy
+        retry_strategy = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504],
+        )
+        
+        adapter = HTTPAdapter(max_retries=retry_strategy)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        
+        # Configure SSL context
+        ssl_context = ssl.create_default_context()
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
+        
+        # Apply SSL context to session
+        session.verify = False
+        
+        return session
 
     def extract_keyframes(self, video_path: Path, step_sec: float = 0.5) -> Dict[str, Any]:
         """
@@ -201,7 +229,8 @@ Be concise. Return only valid JSON."""
                 "temperature": 0
             }
 
-            response = requests.post(url, headers=headers, json=payload, timeout=60)
+            session = self._create_session()
+            response = session.post(url, headers=headers, json=payload, timeout=60)
             response.raise_for_status()
             
             result = response.json()
@@ -368,7 +397,8 @@ IMPORTANT:
                 "max_tokens": 1000
             }
             
-            response = requests.post(
+            session = self._create_session()
+            response = session.post(
                 "https://api.openai.com/v1/chat/completions",
                 headers=headers,
                 json=data,
