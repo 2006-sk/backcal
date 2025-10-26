@@ -83,6 +83,11 @@ def build_unified_json(
         "visual_generated": visual_output.get("embedding_dimensions", 0) > 0
     }
     
+    # Add ad density index
+    unified["ad_density_index"] = _calculate_ad_density_index(
+        gemini_output, reka_output, audio_output, visual_output
+    )
+    
     # Add advanced scores
     advanced_scores = _calculate_advanced_scores(
         gemini_output, reka_output, audio_output, visual_output
@@ -262,6 +267,55 @@ def _calculate_audio_visual_alignment(audio_output: Dict[str, Any], visual_outpu
         return round(score, 2)
     
     return 0.5
+
+
+def _calculate_ad_density_index(
+    gemini_output: Dict[str, Any],
+    reka_output: Dict[str, Any],
+    audio_output: Dict[str, Any],
+    visual_output: Dict[str, Any]
+) -> float:
+    """
+    Calculate Ad Density Index - how information-dense the ad is.
+    Combines: objects detected, keywords, transcript words, and visual elements.
+    """
+    # Extract data from all sources
+    vision_features = gemini_output.get("vision_features", {})
+    objects_count = len(vision_features.get("objects", []))
+    keywords_count = len(reka_output.get("keywords", []))
+    
+    transcript = audio_output.get("transcript", "") or audio_output.get("audio_transcript", "")
+    transcript_words = len(transcript.split()) if transcript else 0
+    
+    captions = visual_output.get("captions", [])
+    caption_count = len(captions)
+    
+    # Duration for normalization
+    duration = gemini_output.get("duration", 1.0)  # Avoid division by zero
+    
+    # Calculate density components
+    # Objects per second
+    objects_density = objects_count / duration if duration > 0 else 0
+    
+    # Keywords per second
+    keywords_density = keywords_count / duration if duration > 0 else 0
+    
+    # Words per second (talk density)
+    words_density = transcript_words / duration if duration > 0 else 0
+    
+    # Captions per second (visual information density)
+    captions_density = caption_count / duration if duration > 0 else 0
+    
+    # Combine all densities (weighted)
+    # Typical values: objects_density 0.5-2, keywords_density 0.3-1, words_density 1-3, captions_density 0.5-2
+    ad_density = (
+        objects_density * 0.3 +
+        keywords_density * 0.3 +
+        words_density * 0.2 +
+        captions_density * 0.2
+    )
+    
+    return round(ad_density, 2)
 
 
 def _generate_analysis_note(
