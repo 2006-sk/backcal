@@ -22,6 +22,8 @@ async def _parse_reka_with_groq(raw_text: str) -> Dict[str, Any]:
     """
     try:
         from groq import Groq
+        import re
+        import json
         
         if not settings.GROQ_API_KEY:
             return None

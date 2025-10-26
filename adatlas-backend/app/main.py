@@ -1,12 +1,15 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from pathlib import Path
 from typing import Optional
 import asyncio
 import cv2
 import numpy as np
 import base64
+import json
 
 from app.core.config import settings
 from app.models.schemas import AnalyzeResult, UploadResponse, BatchAnalyzeRequest, AnalyzeRequest
@@ -31,6 +34,21 @@ app.add_middleware(
     allow_origins=["*"], allow_credentials=True,
     allow_methods=["*"], allow_headers=["*"],
 )
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Custom validation error handler to prevent UTF-8 decode errors."""
+    errors = []
+    for error in exc.errors():
+        errors.append({
+            "loc": str(error.get("loc", [])),
+            "msg": str(error.get("msg", "")),
+            "type": str(error.get("type", ""))
+        })
+    return JSONResponse(
+        status_code=422,
+        content={"detail": errors}
+    )
 
 # Initialize services
 storage = Storage()
@@ -75,6 +93,23 @@ async def upload(file: UploadFile = File(...)):
     
     fid, path = storage.save_upload(file.file, file.filename)
     return UploadResponse(id=fid, file_name=Path(path).name, saved_path=str(path))
+
+def sanitize_response(data):
+    """Convert numpy arrays and other non-serializable types to JSON-safe formats."""
+    if isinstance(data, dict):
+        return {k: sanitize_response(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        return [sanitize_response(item) for item in data]
+    elif isinstance(data, np.ndarray):
+        return data.tolist()
+    elif isinstance(data, (np.integer, np.floating)):
+        return float(data)
+    elif isinstance(data, bytes):
+        return data.decode('utf-8', errors='ignore')
+    elif isinstance(data, (int, float, str, bool, type(None))):
+        return data
+    else:
+        return str(data)
 
 @app.post("/analyze")
 async def analyze(request: AnalyzeRequest):
@@ -245,7 +280,7 @@ async def analyze(request: AnalyzeRequest):
                         }
                     )
                 
-                return {
+                result = {
                     "gemini": gemini_features,
                     "reka_features": reka_features,
                     "audio_embedding": {
@@ -261,6 +296,7 @@ async def analyze(request: AnalyzeRequest):
                     },
                     "unified": unified_json
                 }
+                return sanitize_response(result)
                 
             except Exception as e:
                 return AnalyzeResult(
@@ -301,13 +337,36 @@ async def analyze(request: AnalyzeRequest):
                 vision_result, visual_result = await asyncio.gather(vision_task, visual_task)
                 
                 # Create Gemini features
+                # Extract scene_description for image summary
+                vision_features = vision_result.get("vision_features", {})
+                image_summary = None
+                if isinstance(vision_features, dict):
+                    scene_desc = vision_features.get("scene_description", "")
+                    if scene_desc:
+                        # Truncate to 300 chars at sentence boundary
+                        if len(scene_desc) > 300:
+                            truncated = scene_desc[:300]
+                            # Find last period/complete sentence
+                            last_period = truncated.rfind('.')
+                            if last_period > 250:  # Only use if not too far back
+                                image_summary = truncated[:last_period + 1]
+                            else:
+                                image_summary = truncated + "..."
+                        else:
+                            image_summary = scene_desc
+                    else:
+                        # Fallback: create summary from vision features
+                        mood = vision_features.get("mood", "unknown")
+                        activity = vision_features.get("activity", "unknown")
+                        image_summary = f"A {mood} image showing {activity}."
+                
                 gemini_features = {
                     "file_name": Path(path).name,
                     "duration": 0.0,  # Images have no duration
                     "scene_count": 1,
                     "color_tone": None,
-                    "vision_features": vision_result.get("vision_features"),
-                    "video_summary": None,
+                    "vision_features": vision_features,
+                    "video_summary": image_summary,
                     "error": vision_result.get("error")
                 }
                 
@@ -403,13 +462,36 @@ async def analyze_image(request: AnalyzeRequest):
         vision_result, visual_result = await asyncio.gather(vision_task, visual_task)
         
         # Create Gemini features
+        # Extract scene_description for image summary
+        vision_features = vision_result.get("vision_features", {})
+        image_summary = None
+        if isinstance(vision_features, dict):
+            scene_desc = vision_features.get("scene_description", "")
+            if scene_desc:
+                # Truncate to 300 chars at sentence boundary
+                if len(scene_desc) > 300:
+                    truncated = scene_desc[:300]
+                    # Find last period/complete sentence
+                    last_period = truncated.rfind('.')
+                    if last_period > 250:  # Only use if not too far back
+                        image_summary = truncated[:last_period + 1]
+                    else:
+                        image_summary = truncated + "..."
+                else:
+                    image_summary = scene_desc
+            else:
+                # Fallback: create summary from vision features
+                mood = vision_features.get("mood", "unknown")
+                activity = vision_features.get("activity", "unknown")
+                image_summary = f"A {mood} image showing {activity}."
+        
         gemini_features = {
             "file_name": Path(path).name,
             "duration": 0.0,  # Images have no duration
             "scene_count": 1,
             "color_tone": None,
-            "vision_features": vision_result.get("vision_features"),
-            "video_summary": None,
+            "vision_features": vision_features,
+            "video_summary": image_summary,
             "error": vision_result.get("error")
         }
         
@@ -436,7 +518,7 @@ async def analyze_image(request: AnalyzeRequest):
                 }
             )
         
-        return {
+        result = {
             "gemini": gemini_features,
             "reka_features": {"note": "Image analysis - Reka not supported for images"},
             "visual_embedding": {
@@ -447,6 +529,7 @@ async def analyze_image(request: AnalyzeRequest):
             },
             "unified": unified_json
         }
+        return sanitize_response(result)
         
     except Exception as e:
         print(f"[Image] Analysis failed: {e}")

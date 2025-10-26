@@ -150,7 +150,8 @@ def create_audio_embedding(transcript: str) -> list[float]:
             task_type='retrieval_document'
         )
         embedding = result['embedding']
-        print(f"[Audio] Embedding generated: {len(embedding)} dimensions")
+        actual_dim = len(embedding)
+        print(f"[Audio] Embedding generated: {actual_dim} dimensions (model: text-embedding-004)")
         return embedding
     except Exception as e:
         print(f"[Audio] Gemini embedding failed: {e}")

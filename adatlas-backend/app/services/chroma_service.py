@@ -84,29 +84,60 @@ class ChromaService:
             return False
         
         try:
+            # Validate and sanitize embeddings
+            def validate_embedding(emb):
+                if not emb or not isinstance(emb, list):
+                    return [0.0] * 768
+                # Ensure all values are floats
+                return [float(x) for x in emb[:768]]
+            
+            audio_emb = validate_embedding(audio_embedding)
+            visual_emb = validate_embedding(visual_embedding)
+            
+            # Sanitize metadata (ensure all values are ChromaDB-compatible)
+            clean_metadata = {}
+            for key, value in metadata.items():
+                if value is None:
+                    continue  # Skip None values
+                elif isinstance(value, bool):
+                    clean_metadata[key] = value
+                elif isinstance(value, (int, float)):
+                    # Convert float to int if it's a whole number
+                    if isinstance(value, float) and value.is_integer():
+                        clean_metadata[key] = int(value)
+                    else:
+                        clean_metadata[key] = value
+                elif isinstance(value, str):
+                    # Ensure string is not empty and is valid
+                    if value and value != "unknown":
+                        clean_metadata[key] = value
+                else:
+                    # Convert anything else to string
+                    clean_metadata[key] = str(value)
+            
             # Store audio embedding
             self.collection.add(
-                embeddings=[audio_embedding] if audio_embedding else [[0.0] * 768],
+                embeddings=[audio_emb],
                 ids=[f"{file_id}_audio"],
                 metadatas=[{
-                    "file_id": file_id,
-                    "file_name": file_name,
-                    "file_type": file_type,
+                    "file_id": str(file_id),
+                    "file_name": str(file_name),
+                    "file_type": str(file_type),
                     "embedding_type": "audio",
-                    **metadata
+                    **clean_metadata
                 }]
             )
             
             # Store visual embedding
             self.collection.add(
-                embeddings=[visual_embedding] if visual_embedding else [[0.0] * 768],
+                embeddings=[visual_emb],
                 ids=[f"{file_id}_visual"],
                 metadatas=[{
-                    "file_id": file_id,
-                    "file_name": file_name,
-                    "file_type": file_type,
+                    "file_id": str(file_id),
+                    "file_name": str(file_name),
+                    "file_type": str(file_type),
                     "embedding_type": "visual",
-                    **metadata
+                    **clean_metadata
                 }]
             )
             
@@ -115,6 +146,8 @@ class ChromaService:
             
         except Exception as e:
             print(f"[Chroma] Failed to store embeddings: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def search_similar(

@@ -177,8 +177,9 @@ def create_visual_embedding(captions: List[str]) -> List[float]:
                 task_type='retrieval_document'
             )
             embedding = result['embedding']
+            actual_dim = len(embedding)
             embeddings.append(embedding)
-            print(f"[Visual] Generated embedding {i+1}/{len(captions)}")
+            print(f"[Visual] Generated embedding {i+1}/{len(captions)}: {actual_dim} dimensions")
         except Exception as e:
             print(f"[Visual] Failed to generate embedding {i+1}: {e}")
             embeddings.append([0.0] * 768)  # Fallback to zero vector
@@ -219,10 +220,10 @@ def get_visual_embeddings(media_path: Union[str, Path], frame_count: int = 5, fr
             
             # Use pre-extracted frames if available
             if frames:
-                # Use ALL frames for captions (no sampling)
-                sampled_frames = frames
+                # Use only even-numbered frames (0, 2, 4, 6, ...)
+                sampled_frames = [frames[i] for i in range(0, len(frames), 2)]
                 
-                print(f"[Visual] Using ALL {len(sampled_frames)} frames for captions")
+                print(f"[Visual] Using {len(sampled_frames)} even-numbered frames (indices 0, 2, 4...) for captions")
                 
                 # Convert base64 frames to temporary image files
                 for i, frame_data in enumerate(sampled_frames):
