@@ -10,6 +10,8 @@ import numpy as np
 from groq import Groq
 
 from app.core.config import settings
+from app.services.audio_embeddings import get_audio_embeddings
+from app.services.visual_embeddings import get_visual_embeddings
 
 
 class GroqHelper:
@@ -377,4 +379,70 @@ Note: Since I cannot directly view the image, provide analysis based on the imag
             return {
                 "error": f"Image analysis failed: {str(e)}",
                 "groq_features": None
+            }
+
+    def analyze_audio_with_groq(self, video_path: Path) -> Dict[str, Any]:
+        """
+        Extract audio, transcribe with Groq Whisper, and generate embeddings.
+        
+        Args:
+            video_path: Path to video file
+            
+        Returns:
+            Dictionary with transcript and embedding
+        """
+        try:
+            print(f"[Groq Audio] Analyzing audio for {video_path.name}...")
+            
+            result = get_audio_embeddings(video_path)
+            
+            return {
+                "audio_transcript": result["transcript"],
+                "audio_embedding": result["embedding"],
+                "embedding_dimensions": len(result["embedding"]),
+                "error": None
+            }
+            
+        except Exception as e:
+            print(f"[Groq Audio] Error: {e}")
+            return {
+                "audio_transcript": None,
+                "audio_embedding": None,
+                "embedding_dimensions": 0,
+                "error": str(e)
+            }
+
+    def analyze_visual_with_groq(self, media_path: Path, frame_count: int = 5, frames: List[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """
+        Extract frames/images, generate captions with GPT-4o vision, and create embeddings.
+        
+        Args:
+            media_path: Path to video or image file
+            frame_count: Number of frames to extract (for videos only, if frames not provided)
+            frames: Pre-extracted frames from gemini_helper (optional)
+            
+        Returns:
+            Dictionary with captions and embedding
+        """
+        try:
+            print(f"[Groq Visual] Analyzing visual content for {media_path.name}...")
+            
+            result = get_visual_embeddings(media_path, frame_count, frames)
+            
+            return {
+                "visual_captions": result["captions"],
+                "visual_embedding": result["embedding"],
+                "embedding_dimensions": len(result["embedding"]),
+                "frame_count": len(result["captions"]),
+                "error": None
+            }
+            
+        except Exception as e:
+            print(f"[Groq Visual] Error: {e}")
+            return {
+                "visual_captions": None,
+                "visual_embedding": None,
+                "embedding_dimensions": 0,
+                "frame_count": 0,
+                "error": str(e)
             }

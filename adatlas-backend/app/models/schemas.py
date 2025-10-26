@@ -17,3 +17,7 @@ class UploadResponse(BaseModel):
 
 class BatchAnalyzeRequest(BaseModel):
     file_ids: List[str]
+
+class AnalyzeRequest(BaseModel):
+    file_id: Optional[str] = None
+    file_path: Optional[str] = None

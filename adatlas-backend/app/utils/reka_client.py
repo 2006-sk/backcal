@@ -106,10 +106,14 @@ async def reka_indexed_tag(video_id: str) -> Dict[str, Any]:
         raise
 
 
-async def reka_wait_indexed(video_id: str) -> bool:
+async def reka_wait_indexed(video_id: str, timeout_minutes: int = 1.5) -> bool:
     """
     Poll /videos/get every 3 seconds until indexing_status == indexed.
-    Stop after ~180 seconds and return True / False.
+    Stop after timeout_minutes and return True / False.
+    
+    Args:
+        video_id: Video ID to check
+        timeout_minutes: Timeout in minutes (default 1.5 minutes for QuickTag fallback)
     """
     url = f"{settings.REKA_BASE}/videos/get"
     
@@ -122,10 +126,12 @@ async def reka_wait_indexed(video_id: str) -> bool:
         "video_ids": [video_id]
     }
     
-    print(f"[Reka] Waiting for video {video_id} to be indexed...")
+    print(f"[Reka] Waiting for video {video_id} to be indexed (timeout: {timeout_minutes}m)...")
     
     import asyncio
-    max_attempts = 60  # 60 * 3 seconds = 180 seconds (3 minutes)
+    import time
+    start_time = time.time()
+    max_attempts = int(timeout_minutes * 20)  # 20 attempts per minute (3s interval)
     attempt = 0
     
     while attempt < max_attempts:
@@ -146,7 +152,8 @@ async def reka_wait_indexed(video_id: str) -> bool:
                             print(f"[Reka] Indexing: {status} (attempt {attempt + 1}/{max_attempts})")
                         
                         if status == 'indexed':
-                            print(f"[Reka] Video {video_id} is now indexed!")
+                            elapsed = time.time() - start_time
+                            print(f"[Reka] Video {video_id} is now indexed! (took {elapsed:.1f}s)")
                             return True
                         elif status == 'failed':
                             print(f"[Reka] Video {video_id} indexing failed!")
@@ -169,8 +176,50 @@ async def reka_wait_indexed(video_id: str) -> bool:
             await asyncio.sleep(3)
             attempt += 1
     
-    print(f"[Reka] Timeout: Video {video_id} not indexed after 180 seconds")
+    elapsed = time.time() - start_time
+    print(f"[Reka] Timeout: Video {video_id} not indexed after {elapsed:.1f}s ({timeout_minutes}m)")
     return False
+
+
+async def reka_index_for_chatbot(file_path: str) -> Dict[str, Any]:
+    """
+    Index video specifically for chatbot usage (separate thread, 2min timeout).
+    This runs independently and can be used for chatbot features.
+    
+    Args:
+        file_path: Path to video file
+        
+    Returns:
+        Dictionary with video_id and indexing status
+    """
+    print(f"[Reka Chatbot] Starting chatbot indexing for {file_path}...")
+    
+    try:
+        # Upload video
+        video_id = await reka_upload_video(file_path)
+        if not video_id:
+            return {
+                "video_id": None,
+                "indexed": False,
+                "error": "Upload failed"
+            }
+        
+        # Wait for indexing with 2-minute timeout for chatbot
+        indexed = await reka_wait_indexed(video_id, timeout_minutes=2.0)
+        
+        return {
+            "video_id": video_id,
+            "indexed": indexed,
+            "error": None if indexed else "Indexing timeout"
+        }
+        
+    except Exception as e:
+        print(f"[Reka Chatbot] Error: {e}")
+        return {
+            "video_id": None,
+            "indexed": False,
+            "error": str(e)
+        }
 
 
 async def reka_chat_video(video_id: str) -> Dict[str, Any]:
@@ -248,7 +297,22 @@ async def reka_quicktag(file_path: str, api_key: str) -> Dict[str, Any]:
                 print(f"[Reka] Response: {response.text[:200]}...")
                 
                 if response.status_code == 200:
-                    return response.json()
+                    # Try to parse as JSON first
+                    try:
+                        result = response.json()
+                    except:
+                        # If JSON parsing fails, try parsing response text
+                        result = response.text
+                    
+                    # Handle QuickTag response (may be string wrapped in dict or just string)
+                    if isinstance(result, str):
+                        try:
+                            result = json.loads(result)
+                        except:
+                            print(f"[Reka] Could not parse QuickTag string response")
+                            result = {"raw_response": result}
+                    
+                    return result
                 else:
                     # Error handling as per docs
                     try:
